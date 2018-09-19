@@ -7,14 +7,22 @@ Background
 
 We are able to build scalabe processing pipelines from Agave Apps and Abaco Reactors. However, the same flexibility that gives us high iteration velocity makes tracking processing job provenance quite challenging. One concern is how to represent the collection of software entities used to do the work. That is handled by the Pipelines component. A second, equal concern is how to tie metadata about experimental design to inputs and parameters for specific pipelines to the specific outputs of processing jobs. That is handled by PipelineJobs, which work in tandem with Pipelines and the other aspects of the Data Catalog.
 
-A PipelineJob has the following core properties:
+The PipelineJobs system has two components. The first is a persisent Reactor that collects and manages state information for all running jobs. It is accessible by callback or direct messaging. The other is a client-side library
+bundled with the ``sd2e/reactors:python` base images, which we leverage from within the coordinating Reactor in a pipeline to initiate tracking of a PipelineJob.
+
+What is a PipelineJob?
+^^^^^^^^^^^^^^^^^^^^^^
+
+Essentially, it's an entry in the ``jobs`` collection of the Data Catalog with a specifc structure and a specific usage pattern enforced and enabled by the Pipeline Jobs Manager Reactor and logic in the client-side Python ``datacatalog`` package.
+
+A PipelineJob has five key properties:
 
 * ``pipeline_uuid`` - unique ID referring to a known, active pipeline
 * ``uuid`` - unique ID hashed from the originating actorId and parameterization
 * ``status`` - current state of the job
 * ``history`` - ordered, timestamped history of the jobs state
 
-Transitions among states of a PipelineJob is implemeted using a Finite State Machine. The current set of states and valid transition events is illustrated in this diagram.
+Transitions among states of a PipelineJob are implemeted using a Finite State Machine. The current set of states and valid transition events is illustrated here:
 
 .. image:: pipelinejob-fsm.png
    :alt: Graph of the PipelineJob Finite State Machine
@@ -203,16 +211,16 @@ A job that has begun running can be terminated by sending it a ``fail`` event. A
    print(my_job.status)
    >>> 'FAILED'
 
-Configuring a PipelineJob's children to update job status
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Deferred Updates to PipelineJobs
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Overview
 ~~~~~~~~
 
-The Pipelines system leverages Agave's event-driven notification and Abaco's rich callback support to let Agave jobs update the status of the PipelineJob created by the Reactor that spawned them. It accomplished this by means of a dedicated ``pipeline-jobs-manager`` Reactor that processes status updates from Agave jobs and other Reactors.
+The Pipelines system leverages Agave's event-driven notification and Abaco's rich callback support to let Agave jobs update the status of the PipelineJob created by the Reactor that spawned them. It is equally possible for other Reactors (or even future executions of the current Reactor) to update PipelineJobs as well. Rather than relying on persisent database connnections, this is accomplished this by a event system implemented in the ``pipeline-jobs-manager`` Reactor `(documented here) <https://gitlab.sd2e.org/sd2program/pipeline-jobs-manager>`_.
 
-Agave Jobs
-~~~~~~~~~~
+Update from an Agave Job
+~~~~~~~~~~~~~~~~~~~~~~~~
 
 Let's assume we have a Reactor `fcs-reactor` that coordinates execution of an Agave job using the app `fcs-etl-0.4.0u16`. The Reactor already has code to generate a job definition from a template and can generate a JSON job definition that resembles this example.
 
@@ -250,8 +258,8 @@ We can enable this job to update a PipelineJob with one addition to ``notificati
 
 **Explanation:** Actor ``G56vjoAVzGkkq`` is the ``pipeline-jobs-manager``. The url parameters encode event and authorization details: The ``x-nonce`` parameter lets the job send a message to ``G56vjoAVzGkkq``, ``token`` is a job-specific password with a duration of 72 hours, ``uuid`` is the job's unique identifier, and ``status`` is the Agave API job status. We set ``event`` to ``*`` which means that all events from the job are sent to ``pipeline-jobs-manager``, and we set ``persistent`` to false so that only the first instance of any job state change is transmitted. The ``pipeline-jobs-manager`` reactor maps Agave API job states to their relevant PipelineJob event names and processes them as such. Specifically, it sends the named event to the PipelineJob along with the entire body of the Agave jobs callback POST as the ``data`` payload.
 
-Reactors
-~~~~~~~~
+Update from a Reactor
+~~~~~~~~~~~~~~~~~~~~~
 
 Updating a PipelineJob's status from the original actor (but in a different execution) or from another actor is as simple as sending a message to ``pipeline-jobs-manager``. The message must conform to (and is validated against) the ``PipelineJobEvent`` schema documented below. Here is an example:
 
